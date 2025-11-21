@@ -1,0 +1,11 @@
+ cp doc/*.* upload/ 
+ cp doc/aa/*.* upload/ 
+
+
+curl -F "file=@doc/inferno.pdf" http://localhost:8080/api/documents/upload
+
+curl "http://localhost:8080/api/search/files"
+
+curl -X POST http://localhost:8080/api/search/query -H "Content-Type: application/json" \
+  -d '{"question": "IL RINASCIMENTO ITALIANO111", "maxResults": 3}' \
+   | jq .
