@@ -12,3 +12,27 @@ curl "http://localhost:8080/api/search/files"
 curl -X POST http://localhost:8080/api/search/query -H "Content-Type: application/json" \
   -d '{"question": "IL RINASCIMENTO ITALIANO111", "maxResults": 3}' \
    | jq .
+
+# esempio di ricerca con domanda e numero massimo di risultati su doc storia_20_pagine.docx
+curl -X POST http://localhost:8080/api/search/query -H "Content-Type: application/json" \
+  -d '{"question": "Arion era un giovane viaggiatore cresciuto ", "maxResults": 1}' \
+   | jq .
+
+
+
+# esempio di ricerca diretta su elasticsearch per ottenere tutti i chunk di un file ordinati per chunkIndex
+ curl -s "http://localhost:9200/documents/_search?pretty" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": {
+      "match": {
+        "filename": "1Samuele.pdf"
+      }
+    },
+    "sort": [
+      {
+        "chunkIndex": "asc"
+      }
+    ]
+  }'  
+
