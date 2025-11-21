@@ -66,6 +66,15 @@ public class UploadController {
             
             // Altrimenti processa sincrono
             SearchDocument doc = documentService.indexDocument(file.getOriginalFilename(), file.getBytes());
+            
+            // Se doc è null, il file era già presente
+            if (doc == null) {
+                Map<String, String> response = new HashMap<>();
+                response.put("message", "File già indicizzato (stesso contenuto)");
+                response.put("status", "SKIPPED");
+                return ResponseEntity.ok(response);
+            }
+            
             return ResponseEntity.ok(doc);
             
         } catch (Exception e) {

@@ -5,10 +5,23 @@ import com.example.documentsearch.model.UploadStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.Tika;
+import org.apache.tika.metadata.Metadata;
+import org.apache.tika.metadata.TikaCoreProperties;
+import org.apache.tika.parser.AutoDetectParser;
+import org.apache.tika.parser.ParseContext;
+import org.apache.tika.parser.Parser;
+import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+
+import java.io.ByteArrayInputStream;
+import java.security.MessageDigest;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 import java.io.InputStream;
 import java.time.LocalDateTime;
@@ -52,8 +65,24 @@ public class DocumentService {
             
             log.info("Inizio estrazione testo da documento: {} ({})", filename, documentId);
             
+            // Leggi i byte per calcolare checksum ed estrarre metadati
+            byte[] fileBytes = inputStream.readAllBytes();
+            String checksum = calculateChecksum(fileBytes);
+            log.info("Checksum calcolato: {}", checksum);
+            
+            // Estrai metadati
+            Metadata metadata = extractMetadata(fileBytes);
+            
+            // Verifica se esiste già
+            if (documentExists(filename, checksum)) {
+                log.info("⚠️ Documento già esistente (stesso nome e checksum): {} - SKIP", filename);
+                status.setStatus("SKIPPED");
+                status.setMessage("File già indicizzato (stesso contenuto)");
+                return CompletableFuture.completedFuture(documentId);
+            }
+            
             // Estrai tutto il testo usando Tika (rileva automaticamente il formato)
-            String text = tika.parseToString(inputStream);
+            String text = tika.parseToString(new java.io.ByteArrayInputStream(fileBytes));
             
             log.info("Testo estratto: {} caratteri. Inizio chunking...", text.length());
             
@@ -70,12 +99,16 @@ public class DocumentService {
                 doc.setId(UUID.randomUUID().toString());
                 doc.setDocumentId(documentId);
                 doc.setFilename(filename);
+                doc.setFileChecksum(checksum);
                 doc.setContent(chunks.get(i));
                 doc.setChunkIndex(i);
                 doc.setTotalChunks(chunks.size());
                 doc.setFileSize(fileSize);
                 doc.setUploadedAt(LocalDateTime.now());
                 doc.setStatus("COMPLETED");
+                
+                // Applica metadati (uguali per tutti i chunk dello stesso documento)
+                applyMetadata(doc, metadata);
                 
                 elastic.save(doc);
                 documents.add(doc);
@@ -109,7 +142,21 @@ public class DocumentService {
      * Supporta tutti i formati rilevati da Apache Tika.
      */
     public SearchDocument indexDocument(String filename, InputStream inputStream) throws Exception {
-        String text = tika.parseToString(inputStream);
+        // Leggi i byte per calcolare checksum ed estrarre metadati
+        byte[] fileBytes = inputStream.readAllBytes();
+        String checksum = calculateChecksum(fileBytes);
+        log.info("Checksum calcolato per file sincrono: {}", checksum);
+        
+        // Estrai metadati
+        Metadata metadata = extractMetadata(fileBytes);
+        
+        // Verifica se esiste già
+        if (documentExists(filename, checksum)) {
+            log.info("⚠️ Documento già esistente (stesso nome e checksum): {} - SKIP", filename);
+            return null; // Ritorna null per indicare skip
+        }
+        
+        String text = tika.parseToString(new java.io.ByteArrayInputStream(fileBytes));
         String documentId = UUID.randomUUID().toString();
         
         // Usa chunking anche per file piccoli
@@ -122,11 +169,15 @@ public class DocumentService {
             doc.setId(UUID.randomUUID().toString());
             doc.setDocumentId(documentId);
             doc.setFilename(filename);
+            doc.setFileChecksum(checksum);
             doc.setContent(chunks.get(i));
             doc.setChunkIndex(i);
             doc.setTotalChunks(chunks.size());
             doc.setUploadedAt(LocalDateTime.now());
             doc.setStatus("COMPLETED");
+            
+            // Applica metadati
+            applyMetadata(doc, metadata);
             
             lastDoc = elastic.save(doc);
         }
@@ -143,6 +194,135 @@ public class DocumentService {
      */
     public UploadStatus getUploadStatus(String documentId) {
         return uploadStatusMap.get(documentId);
+    }
+    
+    /**
+     * Estrae metadati dal file usando Tika
+     */
+    private Metadata extractMetadata(byte[] fileBytes) {
+        try {
+            Parser parser = new AutoDetectParser();
+            BodyContentHandler handler = new BodyContentHandler(-1); // -1 = no limit
+            Metadata metadata = new Metadata();
+            ParseContext context = new ParseContext();
+            
+            parser.parse(new ByteArrayInputStream(fileBytes), handler, metadata, context);
+            return metadata;
+        } catch (Exception e) {
+            log.warn("Errore nell'estrazione metadati: {}", e.getMessage());
+            return new Metadata(); // Ritorna metadata vuoti
+        }
+    }
+    
+    /**
+     * Applica i metadati estratti al documento
+     */
+    private void applyMetadata(SearchDocument doc, Metadata metadata) {
+        try {
+            // Autore
+            String author = metadata.get(TikaCoreProperties.CREATOR);
+            if (author == null) author = metadata.get("Author");
+            doc.setAuthor(author);
+            
+            // Titolo
+            doc.setTitle(metadata.get(TikaCoreProperties.TITLE));
+            
+            // Content Type
+            doc.setContentType(metadata.get("Content-Type"));
+            
+            // Data creazione
+            String created = metadata.get(TikaCoreProperties.CREATED);
+            if (created != null) {
+                try {
+                    Date creationDate = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").parse(created);
+                    doc.setCreationDate(java.time.Instant.ofEpochMilli(creationDate.getTime())
+                            .atZone(java.time.ZoneId.systemDefault()).toLocalDateTime());
+                } catch (Exception e) {
+                    log.debug("Impossibile parsare data creazione: {}", created);
+                }
+            }
+            
+            // Data modifica
+            String modified = metadata.get(TikaCoreProperties.MODIFIED);
+            if (modified != null) {
+                try {
+                    Date modifiedDate = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").parse(modified);
+                    doc.setLastModified(java.time.Instant.ofEpochMilli(modifiedDate.getTime())
+                            .atZone(java.time.ZoneId.systemDefault()).toLocalDateTime());
+                } catch (Exception e) {
+                    log.debug("Impossibile parsare data modifica: {}", modified);
+                }
+            }
+            
+            // Creator (software)
+            doc.setCreator(metadata.get("producer")); // PDF producer
+            if (doc.getCreator() == null) {
+                doc.setCreator(metadata.get("Application-Name"));
+            }
+            
+            // Keywords
+            String keywords = metadata.get("Keywords");
+            if (keywords == null) keywords = metadata.get("meta:keyword");
+            doc.setKeywords(keywords);
+            
+            // Subject
+            doc.setSubject(metadata.get(TikaCoreProperties.SUBJECT));
+            
+            // Page count (principalmente per PDF)
+            String pages = metadata.get("xmpTPg:NPages");
+            if (pages == null) pages = metadata.get("Page-Count");
+            if (pages != null) {
+                try {
+                    doc.setPageCount(Integer.parseInt(pages));
+                } catch (NumberFormatException e) {
+                    log.debug("Impossibile parsare numero pagine: {}", pages);
+                }
+            }
+            
+            log.debug("Metadati estratti - Autore: {}, Titolo: {}, Tipo: {}, Pagine: {}",
+                    doc.getAuthor(), doc.getTitle(), doc.getContentType(), doc.getPageCount());
+                    
+        } catch (Exception e) {
+            log.warn("Errore nell'applicazione metadati: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Calcola il checksum SHA-256 di un array di byte
+     */
+    private String calculateChecksum(byte[] data) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(data);
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (Exception e) {
+            log.error("Errore nel calcolo del checksum", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Verifica se esiste già un documento con lo stesso filename e checksum
+     */
+    private boolean documentExists(String filename, String checksum) {
+        NativeQuery query = NativeQuery.builder()
+                .withQuery(q -> q
+                        .bool(b -> b
+                                .must(m -> m.term(t -> t.field("filename.keyword").value(filename)))
+                                .must(m -> m.term(t -> t.field("fileChecksum").value(checksum)))
+                        )
+                )
+                .withMaxResults(1)
+                .build();
+        
+        SearchHits<?> hits = elastic.search(query, SearchDocument.class);
+        return hits.getTotalHits() > 0;
     }
     
     /**

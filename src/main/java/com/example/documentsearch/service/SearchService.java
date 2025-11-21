@@ -71,9 +71,22 @@ public class SearchService {
                 result = new SearchResultDto();
                 result.setDocumentId(docId);
                 result.setFilename(doc.getFilename());
+                result.setFileChecksum(doc.getFileChecksum());
                 result.setChunkIndex(doc.getChunkIndex());
                 result.setScore(Double.valueOf(hit.getScore()));
                 result.setHighlights(new ArrayList<>());
+                
+                // Metadati
+                result.setAuthor(doc.getAuthor());
+                result.setTitle(doc.getTitle());
+                result.setContentType(doc.getContentType());
+                result.setCreationDate(doc.getCreationDate());
+                result.setLastModified(doc.getLastModified());
+                result.setCreator(doc.getCreator());
+                result.setKeywords(doc.getKeywords());
+                result.setSubject(doc.getSubject());
+                result.setPageCount(doc.getPageCount());
+                
                 resultsByDocument.put(docId, result);
             }
             
@@ -125,19 +138,26 @@ public class SearchService {
     }
     
     /**
-     * Restituisce la lista dei nomi file unici indicizzati
+     * Restituisce la lista dei nomi file unici indicizzati con checksum
      */
     public List<String> getIndexedFilenames() {
         NativeQuery nativeQuery = NativeQuery.builder()
                 .withQuery(q -> q.matchAll(m -> m))
-                .withFields("filename")
+                .withFields("filename", "fileChecksum")
                 .withMaxResults(10000)
                 .build();
 
         SearchHits<SearchDocument> searchHits = elastic.search(nativeQuery, SearchDocument.class);
         
         return searchHits.getSearchHits().stream()
-                .map(hit -> hit.getContent().getFilename())
+                .map(hit -> {
+                    SearchDocument doc = hit.getContent();
+                    String checksum = doc.getFileChecksum();
+                    if (checksum != null && checksum.length() > 8) {
+                        checksum = checksum.substring(0, 8) + "...";
+                    }
+                    return doc.getFilename() + " [" + checksum + "]";
+                })
                 .filter(Objects::nonNull)
                 .distinct()
                 .sorted()

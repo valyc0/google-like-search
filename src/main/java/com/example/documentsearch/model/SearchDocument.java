@@ -21,8 +21,39 @@ public class SearchDocument {
     @Field(type = FieldType.Text)
     private String filename;
 
+    @Field(type = FieldType.Keyword)
+    private String fileChecksum; // SHA-256 del file originale per de-duplicazione
+
     @Field(type = FieldType.Text)
     private String content; // Il chunk di testo
+    
+    // Metadati estratti da Tika
+    @Field(type = FieldType.Text)
+    private String author; // Autore del documento
+    
+    @Field(type = FieldType.Text)
+    private String title; // Titolo del documento
+    
+    @Field(type = FieldType.Keyword)
+    private String contentType; // Tipo MIME (application/pdf, text/html, etc.)
+    
+    @Field(type = FieldType.Date, format = {}, pattern = "uuuu-MM-dd'T'HH:mm:ss.SSS")
+    private LocalDateTime creationDate; // Data creazione documento
+    
+    @Field(type = FieldType.Date, format = {}, pattern = "uuuu-MM-dd'T'HH:mm:ss.SSS")
+    private LocalDateTime lastModified; // Data ultima modifica
+    
+    @Field(type = FieldType.Text)
+    private String creator; // Software/applicazione che ha creato il documento
+    
+    @Field(type = FieldType.Text)
+    private String keywords; // Parole chiave del documento
+    
+    @Field(type = FieldType.Text)
+    private String subject; // Oggetto/argomento del documento
+    
+    @Field(type = FieldType.Integer)
+    private Integer pageCount; // Numero di pagine (per PDF)
 
     @Field(type = FieldType.Integer)
     private Integer chunkIndex; // Indice del chunk (0, 1, 2, ...)
