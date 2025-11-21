@@ -1,0 +1,32 @@
+NOTA INFORMATIVA - PROTEZIONE DATI
+
+Gentile Utente,
+
+con la presente desideriamo informarLa riguardo al trattamento dei dati personali
+nel contesto dell'utilizzo del sistema di gestione documentale.
+
+FINALITÀ DEL TRATTAMENTO
+I dati e i documenti caricati vengono trattati esclusivamente per finalità di
+archiviazione e ricerca all'interno dell'organizzazione.
+
+NATURA DEI DATI
+Il sistema elabora documenti aziendali che possono contenere informazioni di
+natura professionale e tecnica.
+
+SICUREZZA
+Tutti i documenti vengono indicizzati e conservati su server sicuri con accesso
+controllato. L'infrastruttura utilizza protocolli di sicurezza all'avanguardia.
+
+DIRITTI DELL'UTENTE
+L'utente ha diritto di accesso, rettifica e cancellazione dei propri documenti
+in qualsiasi momento attraverso l'interfaccia di amministrazione.
+
+PERIODO DI CONSERVAZIONE
+I documenti vengono conservati finché necessario per le finalità aziendali o
+fino a quando l'utente ne richiede la cancellazione.
+
+Per maggiori informazioni, consultare la privacy policy completa disponibile
+sul portale aziendale.
+
+Cordiali saluti,
+L'Amministrazione

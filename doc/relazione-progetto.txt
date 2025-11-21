@@ -1,0 +1,28 @@
+RELAZIONE TECNICA DEL PROGETTO
+
+Titolo: Sistema di Ricerca Multi-Formato
+Data: 21 Novembre 2025
+Autore: Sviluppo Tecnico
+
+INTRODUZIONE
+Questo documento descrive l'architettura e le funzionalità del sistema di ricerca 
+documentale implementato con Spring Boot e Elasticsearch.
+
+TECNOLOGIE UTILIZZATE
+- Spring Boot 3.3.0
+- Elasticsearch per l'indicizzazione
+- Apache Tika per l'estrazione del testo
+- Apache Camel per il file polling
+
+CARATTERISTICHE PRINCIPALI
+Il sistema supporta l'upload di documenti in vari formati (PDF, DOC, DOCX, XLS, 
+XLSX, TXT, HTML) fino a 10GB di dimensione. I documenti vengono automaticamente 
+indicizzati e resi ricercabili attraverso un motore di ricerca full-text.
+
+FUNZIONALITÀ DI RICERCA
+Gli utenti possono effettuare ricerche nel contenuto di tutti i documenti caricati.
+Il sistema restituisce risultati con highlighting delle parole chiave trovate.
+
+CONCLUSIONI
+Il progetto fornisce una soluzione completa e scalabile per la gestione e ricerca
+di documenti aziendali di diversi formati.

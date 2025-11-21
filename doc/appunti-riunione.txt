@@ -1,0 +1,46 @@
+APPUNTI RIUNIONE DEL 21/11/2025
+
+Partecipanti:
+- Mario Rossi (Project Manager)
+- Laura Bianchi (Sviluppatrice Senior)
+- Giuseppe Verdi (Analista)
+- Anna Ferrari (UX Designer)
+
+Ordine del giorno:
+1. Revisione sprint corrente
+2. Pianificazione prossime attività
+3. Discussione requisiti cliente
+4. Varie ed eventuali
+
+PUNTI DISCUSSI:
+
+1. REVISIONE SPRINT
+Lo sprint attuale si conclude venerdì. La maggior parte delle user story sono completate.
+Rimangono aperti alcuni bug minori che verranno risolti nei prossimi giorni.
+Laura ha completato l'integrazione con il sistema di ricerca Elasticsearch.
+
+2. PIANIFICAZIONE
+Per il prossimo sprint sono previste le seguenti attività:
+- Implementazione interfaccia amministrazione
+- Ottimizzazione performance ricerca
+- Testing di carico sistema
+- Documentazione API
+
+3. REQUISITI CLIENTE
+Il cliente ha richiesto alcune modifiche:
+- Aumentare il limite di upload file a 10GB
+- Aggiungere supporto per formati Office (già implementato)
+- Migliorare la visualizzazione dei risultati di ricerca
+- Implementare sistema di notifiche email
+
+4. VARIE
+Anna presenterà i mockup della nuova interfaccia lunedì prossimo.
+Giuseppe preparerà il documento di analisi per le notifiche email.
+
+AZIONI DA INTRAPRENDERE:
+- Laura: completare bug fix entro giovedì
+- Giuseppe: documento analisi entro martedì prossimo
+- Anna: condividere mockup entro venerdì
+- Mario: aggiornare roadmap di progetto
+
+Prossima riunione: lunedì 25/11/2025 ore 10:00
