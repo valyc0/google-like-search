@@ -1,11 +1,14 @@
+# esempio di upload da terminale di file in una cartella "upload"
 cp ./doc/* ./upload/
 cp ./doc/aa/* ./upload/
 
-
+ # esempio di upload di un singolo file
 curl -F "file=@doc/inferno.pdf" http://localhost:8080/api/documents/upload
 
+# esempio di ricerca di file caricati
 curl "http://localhost:8080/api/search/files"
 
+# esempio di ricerca con domanda e numero massimo di risultati
 curl -X POST http://localhost:8080/api/search/query -H "Content-Type: application/json" \
   -d '{"question": "IL RINASCIMENTO ITALIANO111", "maxResults": 3}' \
    | jq .
