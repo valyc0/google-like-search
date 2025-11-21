@@ -1,5 +1,5 @@
- cp doc/*.* upload/ 
- cp doc/aa/*.* upload/ 
+cp ./doc/* ./upload/
+cp ./doc/aa/* ./upload/
 
 
 curl -F "file=@doc/inferno.pdf" http://localhost:8080/api/documents/upload
