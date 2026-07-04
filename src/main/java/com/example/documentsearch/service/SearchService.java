@@ -86,6 +86,7 @@ public class SearchService {
                 result.setKeywords(doc.getKeywords());
                 result.setSubject(doc.getSubject());
                 result.setPageCount(doc.getPageCount());
+                result.setLang(doc.getLang());
                 
                 resultsByDocument.put(docId, result);
             }

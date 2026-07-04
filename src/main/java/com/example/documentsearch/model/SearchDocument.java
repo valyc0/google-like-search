@@ -69,4 +69,7 @@ public class SearchDocument {
 
     @Field(type = FieldType.Keyword)
     private String status; // PROCESSING, COMPLETED, FAILED
+
+    @Field(type = FieldType.Keyword)
+    private String lang; // Lingua del contenuto: "en", "it", ecc.
 }

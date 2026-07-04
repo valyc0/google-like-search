@@ -37,24 +37,25 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DocumentService {
 
     private final ElasticsearchOperations elastic;
+    private final TranslationService translationService;
     private final Tika tika = new Tika();
-    
+
     @Value("${document.chunk.size:5000}")
     private int chunkSize;
-    
+
+    @Value("${translation.chunk.max-size:15000}")
+    private int translationChunkMaxSize;
+
     // In-memory storage per tracking upload status (in produzione usa Redis/DB)
     private final ConcurrentHashMap<String, UploadStatus> uploadStatusMap = new ConcurrentHashMap<>();
 
-    /**
-     * Processa in modo asincrono un documento grande dividendolo in chunk.
-     * Supporta PDF, DOC, DOCX, XLS, XLSX, TXT, HTML e molti altri formati.
-     */
+    // ---- PUBLIC METHODS ----
+
     @Async
     public CompletableFuture<String> indexDocumentAsync(String filename, InputStream inputStream, long fileSize) {
         String documentId = UUID.randomUUID().toString();
-        
+
         try {
-            // Inizializza lo status
             UploadStatus status = new UploadStatus();
             status.setDocumentId(documentId);
             status.setFilename(filename);
@@ -62,175 +63,196 @@ public class DocumentService {
             status.setFileSize(fileSize);
             status.setProcessedChunks(0);
             uploadStatusMap.put(documentId, status);
-            
+
             log.info("Inizio estrazione testo da documento: {} ({})", filename, documentId);
-            
-            // Leggi i byte per calcolare checksum ed estrarre metadati
+
             byte[] fileBytes = inputStream.readAllBytes();
             String checksum = calculateChecksum(fileBytes);
             log.info("Checksum calcolato: {}", checksum);
-            
-            // Estrai metadati
+
             Metadata metadata = extractMetadata(fileBytes);
-            
-            // Verifica se esiste già
+
             if (documentExists(filename, checksum)) {
-                log.info("⚠️ Documento già esistente (stesso nome e checksum): {} - SKIP", filename);
+                log.info("Documento già esistente (stesso nome e checksum): {} - SKIP", filename);
                 status.setStatus("SKIPPED");
                 status.setMessage("File già indicizzato (stesso contenuto)");
                 return CompletableFuture.completedFuture(documentId);
             }
-            
-            // Estrai tutto il testo usando Tika (rileva automaticamente il formato)
-            String text = tika.parseToString(new java.io.ByteArrayInputStream(fileBytes));
-            
-            log.info("Testo estratto: {} caratteri. Inizio chunking...", text.length());
-            
-            // Dividi in chunk
-            List<String> chunks = splitIntoChunks(text, chunkSize);
-            status.setTotalChunks(chunks.size());
-            
-            log.info("Creati {} chunk. Inizio indicizzazione...", chunks.size());
-            
-            // Indicizza ogni chunk
-            List<SearchDocument> documents = new ArrayList<>();
-            for (int i = 0; i < chunks.size(); i++) {
-                SearchDocument doc = new SearchDocument();
-                doc.setId(UUID.randomUUID().toString());
-                doc.setDocumentId(documentId);
-                doc.setFilename(filename);
-                doc.setFileChecksum(checksum);
-                doc.setContent(chunks.get(i));
-                doc.setChunkIndex(i);
-                doc.setTotalChunks(chunks.size());
-                doc.setFileSize(fileSize);
-                doc.setUploadedAt(LocalDateTime.now());
-                doc.setStatus("COMPLETED");
-                
-                // Applica metadati (uguali per tutti i chunk dello stesso documento)
-                applyMetadata(doc, metadata);
-                
-                elastic.save(doc);
-                documents.add(doc);
-                
-                status.setProcessedChunks(i + 1);
-                log.debug("Indicizzato chunk {}/{}", i + 1, chunks.size());
+
+            String text = tika.parseToString(new ByteArrayInputStream(fileBytes));
+            log.info("Testo estratto: {} caratteri", text.length());
+
+            // Step 1: split in macro-chunk a confini di paragrafo (~15000 char)
+            List<String> translationChunks = splitIntoTranslationChunks(text, translationChunkMaxSize);
+            status.setTotalChunks(translationChunks.size());
+            log.info("Creati {} macro-chunk per traduzione", translationChunks.size());
+
+            // Step 2: traduci, sub-chunka, indicizza
+            List<SearchDocument> allDocs = new ArrayList<>();
+            int globalChunkIndex = 0;
+
+            for (int tci = 0; tci < translationChunks.size(); tci++) {
+                String chunkText = translationChunks.get(tci);
+
+                TranslationService.TranslationResult result = translationService.translateToItalian(chunkText);
+
+                List<String> origSubChunks = splitIntoChunks(chunkText, chunkSize);
+                List<String> transSubChunks = splitIntoChunks(result.getTranslatedText(), chunkSize);
+
+                for (String sub : origSubChunks) {
+                    SearchDocument doc = buildDocument(documentId, filename, checksum, fileSize, sub,
+                            globalChunkIndex++, result.getSourceLang(), metadata);
+                    elastic.save(doc);
+                    allDocs.add(doc);
+                }
+
+                if (!result.getTranslatedText().equals(chunkText)) {
+                    for (String sub : transSubChunks) {
+                        SearchDocument doc = buildDocument(documentId, filename, checksum, fileSize, sub,
+                                globalChunkIndex++, "it", metadata);
+                        elastic.save(doc);
+                        allDocs.add(doc);
+                    }
+                }
+
+                status.setProcessedChunks(tci + 1);
+                log.debug("Processato macro-chunk {}/{} ({} EN, {} IT)",
+                        tci + 1, translationChunks.size(), origSubChunks.size(), transSubChunks.size());
             }
-            
+
+            int total = allDocs.size();
+            for (SearchDocument doc : allDocs) {
+                doc.setTotalChunks(total);
+            }
+            elastic.save(allDocs);
+
             status.setStatus("COMPLETED");
-            status.setMessage("Documento indicizzato con successo in " + chunks.size() + " chunk");
-            
-            log.info("Indicizzazione completata per: {} ({})", filename, documentId);
-            
+            status.setMessage("Documento indicizzato con successo: " + translationChunks.size()
+                    + " macro-chunk, " + total + " index-chunk (originale + IT)");
+
+            log.info("Indicizzazione completata per: {} ({}) — {} index-chunk totali", filename, documentId, total);
+
             return CompletableFuture.completedFuture(documentId);
-            
+
         } catch (Exception e) {
             log.error("Errore durante l'indicizzazione di: " + filename, e);
-            
+
             UploadStatus status = uploadStatusMap.get(documentId);
             if (status != null) {
                 status.setStatus("FAILED");
                 status.setMessage("Errore: " + e.getMessage());
             }
-            
+
             return CompletableFuture.failedFuture(e);
         }
     }
-    
-    /**
-     * Metodo sincrono per file piccoli (con chunking).
-     * Supporta tutti i formati rilevati da Apache Tika.
-     */
+
     public SearchDocument indexDocument(String filename, InputStream inputStream) throws Exception {
-        // Leggi i byte per calcolare checksum ed estrarre metadati
         byte[] fileBytes = inputStream.readAllBytes();
+        long fileSize = fileBytes.length;
         String checksum = calculateChecksum(fileBytes);
         log.info("Checksum calcolato per file sincrono: {}", checksum);
-        
-        // Estrai metadati
+
         Metadata metadata = extractMetadata(fileBytes);
-        
-        // Verifica se esiste già
+
         if (documentExists(filename, checksum)) {
-            log.info("⚠️ Documento già esistente (stesso nome e checksum): {} - SKIP", filename);
-            return null; // Ritorna null per indicare skip
+            log.info("Documento già esistente (stesso nome e checksum): {} - SKIP", filename);
+            return null;
         }
-        
-        String text = tika.parseToString(new java.io.ByteArrayInputStream(fileBytes));
+
+        String text = tika.parseToString(new ByteArrayInputStream(fileBytes));
         String documentId = UUID.randomUUID().toString();
-        
-        // Usa chunking anche per file piccoli
-        List<String> chunks = splitIntoChunks(text, chunkSize);
-        log.info("Creati {} chunk per file sincrono: {}", chunks.size(), filename);
-        
+
+        List<String> translationChunks = splitIntoTranslationChunks(text, translationChunkMaxSize);
+        log.info("Creati {} macro-chunk per file sincrono: {}", translationChunks.size(), filename);
+
         SearchDocument lastDoc = null;
-        for (int i = 0; i < chunks.size(); i++) {
-            SearchDocument doc = new SearchDocument();
-            doc.setId(UUID.randomUUID().toString());
-            doc.setDocumentId(documentId);
-            doc.setFilename(filename);
-            doc.setFileChecksum(checksum);
-            doc.setContent(chunks.get(i));
-            doc.setChunkIndex(i);
-            doc.setTotalChunks(chunks.size());
-            doc.setUploadedAt(LocalDateTime.now());
-            doc.setStatus("COMPLETED");
-            
-            // Applica metadati
-            applyMetadata(doc, metadata);
-            
-            lastDoc = elastic.save(doc);
+        List<SearchDocument> allDocs = new ArrayList<>();
+        int globalChunkIndex = 0;
+
+        for (String chunkText : translationChunks) {
+            TranslationService.TranslationResult result = translationService.translateToItalian(chunkText);
+
+            List<String> origSubChunks = splitIntoChunks(chunkText, chunkSize);
+            List<String> transSubChunks = splitIntoChunks(result.getTranslatedText(), chunkSize);
+
+            for (String sub : origSubChunks) {
+                SearchDocument doc = buildDocument(documentId, filename, checksum, fileSize, sub,
+                        globalChunkIndex++, result.getSourceLang(), metadata);
+                lastDoc = elastic.save(doc);
+                allDocs.add(doc);
+            }
+
+            if (!result.getTranslatedText().equals(chunkText)) {
+                for (String sub : transSubChunks) {
+                    SearchDocument doc = buildDocument(documentId, filename, checksum, fileSize, sub,
+                            globalChunkIndex++, "it", metadata);
+                    elastic.save(doc);
+                    allDocs.add(doc);
+                }
+            }
         }
-        
-        return lastDoc; // Ritorna l'ultimo chunk per compatibilità
+
+        int total = allDocs.size();
+        for (SearchDocument doc : allDocs) {
+            doc.setTotalChunks(total);
+        }
+        elastic.save(allDocs);
+
+        return lastDoc;
     }
-    
+
     public SearchDocument indexDocument(String filename, byte[] bytes) throws Exception {
-        return indexDocument(filename, new java.io.ByteArrayInputStream(bytes));
+        return indexDocument(filename, new ByteArrayInputStream(bytes));
     }
-    
-    /**
-     * Ottieni lo status di un upload
-     */
+
     public UploadStatus getUploadStatus(String documentId) {
         return uploadStatusMap.get(documentId);
     }
-    
-    /**
-     * Estrae metadati dal file usando Tika
-     */
+
+    // ---- PRIVATE HELPERS ----
+
+    private SearchDocument buildDocument(String documentId, String filename, String checksum,
+                                          long fileSize, String content, int chunkIndex,
+                                          String lang, Metadata metadata) {
+        SearchDocument doc = new SearchDocument();
+        doc.setId(UUID.randomUUID().toString());
+        doc.setDocumentId(documentId);
+        doc.setFilename(filename);
+        doc.setFileChecksum(checksum);
+        doc.setContent(content);
+        doc.setChunkIndex(chunkIndex);
+        doc.setFileSize(fileSize);
+        doc.setUploadedAt(LocalDateTime.now());
+        doc.setStatus("COMPLETED");
+        doc.setLang(lang);
+        applyMetadata(doc, metadata);
+        return doc;
+    }
+
     private Metadata extractMetadata(byte[] fileBytes) {
         try {
             Parser parser = new AutoDetectParser();
-            BodyContentHandler handler = new BodyContentHandler(-1); // -1 = no limit
+            BodyContentHandler handler = new BodyContentHandler(-1);
             Metadata metadata = new Metadata();
             ParseContext context = new ParseContext();
-            
             parser.parse(new ByteArrayInputStream(fileBytes), handler, metadata, context);
             return metadata;
         } catch (Exception e) {
             log.warn("Errore nell'estrazione metadati: {}", e.getMessage());
-            return new Metadata(); // Ritorna metadata vuoti
+            return new Metadata();
         }
     }
-    
-    /**
-     * Applica i metadati estratti al documento
-     */
+
     private void applyMetadata(SearchDocument doc, Metadata metadata) {
         try {
-            // Autore
             String author = metadata.get(TikaCoreProperties.CREATOR);
             if (author == null) author = metadata.get("Author");
             doc.setAuthor(author);
-            
-            // Titolo
+
             doc.setTitle(metadata.get(TikaCoreProperties.TITLE));
-            
-            // Content Type
             doc.setContentType(metadata.get("Content-Type"));
-            
-            // Data creazione
+
             String created = metadata.get(TikaCoreProperties.CREATED);
             if (created != null) {
                 try {
@@ -241,8 +263,7 @@ public class DocumentService {
                     log.debug("Impossibile parsare data creazione: {}", created);
                 }
             }
-            
-            // Data modifica
+
             String modified = metadata.get(TikaCoreProperties.MODIFIED);
             if (modified != null) {
                 try {
@@ -253,22 +274,18 @@ public class DocumentService {
                     log.debug("Impossibile parsare data modifica: {}", modified);
                 }
             }
-            
-            // Creator (software)
-            doc.setCreator(metadata.get("producer")); // PDF producer
+
+            doc.setCreator(metadata.get("producer"));
             if (doc.getCreator() == null) {
                 doc.setCreator(metadata.get("Application-Name"));
             }
-            
-            // Keywords
+
             String keywords = metadata.get("Keywords");
             if (keywords == null) keywords = metadata.get("meta:keyword");
             doc.setKeywords(keywords);
-            
-            // Subject
+
             doc.setSubject(metadata.get(TikaCoreProperties.SUBJECT));
-            
-            // Page count (principalmente per PDF)
+
             String pages = metadata.get("xmpTPg:NPages");
             if (pages == null) pages = metadata.get("Page-Count");
             if (pages != null) {
@@ -278,18 +295,12 @@ public class DocumentService {
                     log.debug("Impossibile parsare numero pagine: {}", pages);
                 }
             }
-            
-            log.debug("Metadati estratti - Autore: {}, Titolo: {}, Tipo: {}, Pagine: {}",
-                    doc.getAuthor(), doc.getTitle(), doc.getContentType(), doc.getPageCount());
-                    
+
         } catch (Exception e) {
             log.warn("Errore nell'applicazione metadati: {}", e.getMessage());
         }
     }
-    
-    /**
-     * Calcola il checksum SHA-256 di un array di byte
-     */
+
     private String calculateChecksum(byte[] data) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -306,10 +317,7 @@ public class DocumentService {
             return null;
         }
     }
-    
-    /**
-     * Verifica se esiste già un documento con lo stesso filename e checksum
-     */
+
     private boolean documentExists(String filename, String checksum) {
         NativeQuery query = NativeQuery.builder()
                 .withQuery(q -> q
@@ -320,37 +328,76 @@ public class DocumentService {
                 )
                 .withMaxResults(1)
                 .build();
-        
+
         SearchHits<?> hits = elastic.search(query, SearchDocument.class);
         return hits.getTotalHits() > 0;
     }
-    
+
     /**
-     * Dividi il testo in chunk di dimensione specificata
+     * Divide il testo in macro-chunk a confini di paragrafo (\n\n)
+     * per massimizzare il contesto nella traduzione LLM.
      */
-    private List<String> splitIntoChunks(String text, int chunkSize) {
-        List<String> chunks = new ArrayList<>();
-        
-        if (text == null || text.isEmpty()) {
-            return chunks;
+    private List<String> splitIntoTranslationChunks(String text, int maxChunkSize) {
+        List<String> result = new ArrayList<>();
+
+        if (text == null || text.isEmpty()) return result;
+
+        String[] paragraphs = text.split("\n\n");
+        StringBuilder current = new StringBuilder();
+
+        for (String para : paragraphs) {
+            String trimmed = para.trim();
+            if (trimmed.isEmpty()) continue;
+
+            if (current.length() + trimmed.length() + 2 > maxChunkSize && current.length() > 0) {
+                result.add(current.toString().trim());
+                current = new StringBuilder();
+            }
+
+            if (current.length() > 0) current.append("\n\n");
+            current.append(trimmed);
         }
-        
+
+        if (current.length() > 0) {
+            result.add(current.toString().trim());
+        }
+
+        // Se un singolo paragrafo supera maxChunkSize, splittalo forzatamente
+        List<String> finalResult = new ArrayList<>();
+        for (String chunk : result) {
+            if (chunk.length() > maxChunkSize) {
+                finalResult.addAll(splitIntoChunks(chunk, maxChunkSize));
+            } else {
+                finalResult.add(chunk);
+            }
+        }
+
+        return finalResult;
+    }
+
+    /**
+     * Divide il testo in chunk di dimensione fissa, cercando confini di parola.
+     */
+    private List<String> splitIntoChunks(String text, int size) {
+        List<String> chunks = new ArrayList<>();
+
+        if (text == null || text.isEmpty()) return chunks;
+
         int length = text.length();
-        for (int i = 0; i < length; i += chunkSize) {
-            int end = Math.min(i + chunkSize, length);
-            
-            // Cerca di spezzare su un confine di parola per evitare di tagliare a metà
+        for (int i = 0; i < length; i += size) {
+            int end = Math.min(i + size, length);
+
             if (end < length) {
                 int lastSpace = text.lastIndexOf(' ', end);
                 if (lastSpace > i) {
                     end = lastSpace;
                 }
             }
-            
+
             chunks.add(text.substring(i, end).trim());
-            i = end - chunkSize; // Aggiusta l'indice dopo il trim
+            i = end - size;
         }
-        
+
         return chunks;
     }
 }

@@ -28,4 +28,5 @@ public class SearchResultDto {
     private String keywords;
     private String subject;
     private Integer pageCount;
+    private String lang;
 }

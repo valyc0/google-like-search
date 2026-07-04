@@ -12,6 +12,9 @@ This project demonstrates a "Google-like" search engine using Spring Boot 3, Ela
 ✅ **Highlighting** - Search results include highlighted snippets  
 ✅ **Status tracking** - Monitor processing progress for large files  
 ✅ **Automatic format detection** - Apache Tika automatically detects file formats  
+✅ **Multi-language search** - Upload documents in any language, search in both original and Italian  
+✅ **Automatic language detection** - LLM detects source language per chunk (en, fr, ar, etc.)  
+✅ **LLM-powered translation** - Each chunk is translated to Italian via Cerebras API for cross-language retrieval  
 
 ## Prerequisites
 
@@ -159,7 +162,7 @@ curl "http://localhost:9200/documents/_count?pretty"
 
 **Raw search** (for debugging - returns all chunks):
 ```bash
-curl "http://localhost:8080/api/search/raw?q=Samuele"
+curl "http://localhost:9200/api/search/raw?q=Samuele"
 ```
 
 **List indexed files**:
@@ -167,7 +170,29 @@ curl "http://localhost:8080/api/search/raw?q=Samuele"
 curl "http://localhost:8080/api/search/files"
 ```
 
-### 4. Check Elasticsearch Index
+### 5. Multi-Language Search
+
+Documents in any language are automatically translated to Italian via LLM (Cerebras API). Each chunk is indexed twice:
+- **Original** → `lang` set to detected language code (e.g. `"ar"`, `"en"`, `"fr"`)
+- **Translation** → `lang` set to `"it"`
+
+Search in the original language:
+```bash
+curl -X POST http://localhost:8080/api/search/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "الأرنب"}'
+```
+
+Search in Italian:
+```bash
+curl -X POST http://localhost:8080/api/search/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "coniglio"}'
+```
+
+Both queries find the same document (grouped by `documentId`). The `lang` field in the response shows which version matched.
+
+### 6. Check Elasticsearch Index
 
 View indexed documents:
 ```bash
@@ -226,6 +251,15 @@ file-polling.enabled=false
 file-polling.input-directory=./upload
 file-polling.processed-directory=./processed
 file-polling.error-directory=./errors
+
+# Translation API (Cerebras / OpenAI-compatible)
+translation.enabled=true
+translation.api.url=https://api.cerebras.ai/v1/chat/completions
+translation.api.model=gpt-oss-120b
+translation.api.key=<your-api-key>
+
+# Macro-chunk size for LLM translation (paragraph boundaries)
+translation.chunk.max-size=15000
 ```
 
 ## Supported File Formats
@@ -317,17 +351,20 @@ ls processed/
 
 1. **Upload** → File received via multipart upload
 2. **Extraction** → Apache Tika extracts text (automatic format detection)
-3. **Chunking** → Text split into chunks of ~5000 characters
-4. **Indexing** → Each chunk indexed separately in Elasticsearch
-5. **Search** → Query searches across all chunks, results grouped by document
+3. **Macro-chunking** → Text split at paragraph boundaries (~15000 chars) for optimal LLM context
+4. **Translation** → Each macro-chunk is translated to Italian via LLM API + source language detected
+5. **Index-chunking** → Original and translated text split into ~5000 char chunks for search granularity
+6. **Indexing** → All chunks indexed in Elasticsearch with `lang` field (original language code + "it")
+7. **Search** → Query searches across both languages, results grouped by document
 
 ### Components
 
-- **DocumentService**: Handles document parsing, chunking, and asynchronous indexing
-- **SearchService**: Full-text search with highlighting and result grouping
+- **DocumentService**: Handles document parsing, two-level chunking (macro + index), translation, and asynchronous indexing
+- **TranslationService**: LLM-powered translation via Cerebras API (OpenAI-compatible), returns translated text + detected source language
+- **SearchService**: Full-text search with highlighting and result grouping, returns `lang` field per result
 - **UploadController**: REST endpoints for upload and status tracking
 - **SearchController**: REST endpoints for search
-- **Document**: Elasticsearch entity with chunk support
+- **Document**: Elasticsearch entity with chunk support and `lang` field
 - **AsyncConfig**: Thread pool configuration for async processing
 - **Apache Tika**: Automatic format detection and text extraction
 
@@ -343,6 +380,9 @@ ls processed/
 - Maximum file size: 10GB (configurable)
 - Supported formats: All formats supported by Apache Tika (PDF, DOC, DOCX, XLS, XLSX, TXT, HTML, etc.)
 - In-memory status tracking (use Redis/DB for production)
+- Scanned PDFs without text layer cannot be indexed (requires OCR)
+- Translation quality depends on LLM model used
+- Schema changes (new fields) require index deletion: `curl -X DELETE http://localhost:9200/documents`
 
 ## Production Recommendations
 
