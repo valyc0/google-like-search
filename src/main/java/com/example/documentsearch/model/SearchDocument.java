@@ -1,5 +1,6 @@
 package com.example.documentsearch.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.elasticsearch.annotations.Document;
@@ -9,6 +10,7 @@ import org.springframework.data.elasticsearch.annotations.FieldType;
 import java.time.LocalDateTime;
 
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 @Document(indexName = "documents")
 public class SearchDocument {
 
@@ -72,4 +74,6 @@ public class SearchDocument {
 
     @Field(type = FieldType.Keyword)
     private String lang; // Lingua del contenuto: "en", "it", ecc.
+
+    private float[] vector; // Dense vector per semantic search (mappato come dense_vector in ES)
 }

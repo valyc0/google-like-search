@@ -15,6 +15,8 @@ This project demonstrates a "Google-like" search engine using Spring Boot 3, Ela
 ✅ **Multi-language search** - Upload documents in any language, search in both original and Italian  
 ✅ **Automatic language detection** - LLM detects source language per chunk (en, fr, ar, etc.)  
 ✅ **LLM-powered translation** - Each chunk is translated to Italian via Cerebras API for cross-language retrieval  
+✅ **Semantic vector search** - Cross-lingual search via multilingual embeddings (intfloat/multilingual-e5-large)  
+✅ **Vector + full-text hybrid** - Use both semantic and keyword search on the same index  
 
 ## Prerequisites
 
@@ -192,7 +194,35 @@ curl -X POST http://localhost:8080/api/search/query \
 
 Both queries find the same document (grouped by `documentId`). The `lang` field in the response shows which version matched.
 
-### 6. Check Elasticsearch Index
+### 6. Semantic Vector Search (Cross-lingua)
+
+Search across languages using multilingual embeddings. An Italian query can find documents in Arabic, Chinese, English, etc. This works because the embedding model maps semantically similar texts to nearby points in vector space regardless of language.
+
+**Search with vector kNN:**
+```bash
+curl "http://localhost:8080/api/search/vector?q=guida%20turistica%20italia&maxResults=5"
+```
+
+Response (same format as full-text search, no highlights):
+```json
+[
+  {
+    "documentId": "abc...",
+    "filename": "guida-arabo.txt",
+    "score": 0.90,
+    "lang": "unknown",
+    ...
+  }
+]
+```
+
+**Confronto tra vector e full-text:**
+| Query italiana | Vector search | Full-text search |
+|---|---|---|
+| `guida turistica italia` | ✅ trovato (score 0.90) | ❌ nessun risultato |
+| `ristorante pizza italiana` | ✅ trovato (score 0.88) | ❌ nessun risultato |
+
+### 7. Check Elasticsearch Index
 
 View indexed documents:
 ```bash
@@ -260,6 +290,13 @@ translation.api.key=<your-api-key>
 
 # Macro-chunk size for LLM translation (paragraph boundaries)
 translation.chunk.max-size=15000
+
+# Embedding API (OpenRouter / OpenAI-compatible)
+embedding.enabled=true
+embedding.api.url=https://openrouter.ai/api/v1/embeddings
+embedding.api.model=intfloat/multilingual-e5-large
+embedding.api.key=sk-or-v1-...
+embedding.dimension=1024
 ```
 
 ## Supported File Formats
@@ -355,13 +392,17 @@ ls processed/
 4. **Translation** → Each macro-chunk is translated to Italian via LLM API + source language detected
 5. **Index-chunking** → Original and translated text split into ~5000 char chunks for search granularity
 6. **Indexing** → All chunks indexed in Elasticsearch with `lang` field (original language code + "it")
-7. **Search** → Query searches across both languages, results grouped by document
+7. **Embedding** → Each chunk is embedded via `EmbeddingService` (OpenRouter API, model `intfloat/multilingual-e5-large`) producing a 1024-dim float vector  
+8. **Vector Indexing** → Vector stored in Elasticsearch as `dense_vector` (cosine similarity) alongside text  
+9. **Search (full-text)** → Query searches across both languages via BM25, results grouped by document  
+10. **Search (vector)** → Query is embedded with the same model, kNN search finds nearest chunks in vector space — works cross-lingua 
 
 ### Components
 
 - **DocumentService**: Handles document parsing, two-level chunking (macro + index), translation, and asynchronous indexing
 - **TranslationService**: LLM-powered translation via Cerebras API (OpenAI-compatible), returns translated text + detected source language
-- **SearchService**: Full-text search with highlighting and result grouping, returns `lang` field per result
+- **EmbeddingService**: Generates vector embeddings via OpenRouter API (or any OpenAI-compatible embedding API). Supports single and batch embedding
+- **SearchService**: Full-text search (BM25) with highlighting AND vector search (kNN with KnnQuery), both grouped by document 
 - **UploadController**: REST endpoints for upload and status tracking
 - **SearchController**: REST endpoints for search
 - **Document**: Elasticsearch entity with chunk support and `lang` field

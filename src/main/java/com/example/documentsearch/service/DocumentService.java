@@ -38,6 +38,7 @@ public class DocumentService {
 
     private final ElasticsearchOperations elastic;
     private final TranslationService translationService;
+    private final EmbeddingService embeddingService;
     private final Tika tika = new Tika();
 
     @Value("${document.chunk.size:5000}")
@@ -124,6 +125,9 @@ public class DocumentService {
             for (SearchDocument doc : allDocs) {
                 doc.setTotalChunks(total);
             }
+
+            generateEmbeddings(allDocs);
+
             elastic.save(allDocs);
 
             status.setStatus("COMPLETED");
@@ -197,6 +201,9 @@ public class DocumentService {
         for (SearchDocument doc : allDocs) {
             doc.setTotalChunks(total);
         }
+
+        generateEmbeddings(allDocs);
+
         elastic.save(allDocs);
 
         return lastDoc;
@@ -208,6 +215,21 @@ public class DocumentService {
 
     public UploadStatus getUploadStatus(String documentId) {
         return uploadStatusMap.get(documentId);
+    }
+
+    private void generateEmbeddings(List<SearchDocument> allDocs) {
+        try {
+            List<String> texts = allDocs.stream()
+                    .map(SearchDocument::getContent)
+                    .toList();
+            List<float[]> vectors = embeddingService.embedBatch(texts);
+            for (int i = 0; i < allDocs.size(); i++) {
+                allDocs.get(i).setVector(vectors.get(i));
+            }
+            log.info("Generati {} embeddings", vectors.size());
+        } catch (Exception e) {
+            log.warn("Errore generazione embeddings: {}", e.getMessage());
+        }
     }
 
     // ---- PRIVATE HELPERS ----

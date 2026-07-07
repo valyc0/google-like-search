@@ -38,6 +38,16 @@ public class SearchController {
     }
     
     /**
+     * Ricerca vettoriale (semantica cross-lingua) usando embeddings
+     */
+    @GetMapping("/vector")
+    public List<SearchResultDto> searchVector(
+            @RequestParam String q,
+            @RequestParam(required = false, defaultValue = "10") Integer maxResults) {
+        return searchService.searchVector(q, maxResults);
+    }
+
+    /**
      * Ricerca raw per debugging - restituisce tutti i chunk trovati
      */
     @GetMapping("/raw")

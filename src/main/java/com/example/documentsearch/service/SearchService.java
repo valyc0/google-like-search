@@ -1,5 +1,6 @@
 package com.example.documentsearch.service;
 
+import co.elastic.clients.elasticsearch._types.KnnQuery;
 import com.example.documentsearch.dto.SearchResultDto;
 import com.example.documentsearch.model.SearchDocument;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import java.util.stream.Collectors;
 public class SearchService {
 
     private final ElasticsearchOperations elastic;
+    private final EmbeddingService embeddingService;
 
     @Value("${document.index.name}")
     private String indexName;
@@ -138,6 +140,72 @@ public class SearchService {
         return searchHits.getSearchHits();
     }
     
+    /**
+     * Ricerca vettoriale (semantica) - chunk vicini alla query nel cross-lingua
+     */
+    public List<SearchResultDto> searchVector(String query, Integer maxResults) {
+        if (maxResults == null) maxResults = 10;
+
+        float[] queryVector = embeddingService.embed(query);
+        List<Float> queryVectorList = new ArrayList<>(queryVector.length);
+        for (float v : queryVector) queryVectorList.add(v);
+
+        int k = maxResults * 3;
+
+        KnnQuery knnQuery = new KnnQuery.Builder()
+                .field("vector")
+                .queryVector(queryVectorList)
+                .k(k)
+                .numCandidates(k * 4)
+                .build();
+
+        NativeQuery nativeQuery = NativeQuery.builder()
+                .withKnnQuery(knnQuery)
+                .withMaxResults(k)
+                .build();
+
+        SearchHits<SearchDocument> searchHits = elastic.search(nativeQuery, SearchDocument.class);
+
+        Map<String, SearchResultDto> resultsByDocument = new HashMap<>();
+
+        for (SearchHit<SearchDocument> hit : searchHits.getSearchHits()) {
+            SearchDocument doc = hit.getContent();
+            String docId = doc.getDocumentId() != null ? doc.getDocumentId() : doc.getId();
+
+            SearchResultDto result = resultsByDocument.get(docId);
+            if (result == null) {
+                result = new SearchResultDto();
+                result.setDocumentId(docId);
+                result.setFilename(doc.getFilename());
+                result.setFileChecksum(doc.getFileChecksum());
+                result.setChunkIndex(doc.getChunkIndex());
+                result.setScore(Double.valueOf(hit.getScore()));
+                result.setHighlights(new ArrayList<>());
+                result.setAuthor(doc.getAuthor());
+                result.setTitle(doc.getTitle());
+                result.setContentType(doc.getContentType());
+                result.setCreationDate(doc.getCreationDate());
+                result.setLastModified(doc.getLastModified());
+                result.setCreator(doc.getCreator());
+                result.setKeywords(doc.getKeywords());
+                result.setSubject(doc.getSubject());
+                result.setPageCount(doc.getPageCount());
+                result.setLang(doc.getLang());
+                resultsByDocument.put(docId, result);
+            }
+
+            if (hit.getScore() > result.getScore()) {
+                result.setScore(Double.valueOf(hit.getScore()));
+                result.setChunkIndex(doc.getChunkIndex());
+            }
+        }
+
+        return resultsByDocument.values().stream()
+                .sorted(Comparator.comparing(SearchResultDto::getScore).reversed())
+                .limit(maxResults)
+                .collect(Collectors.toList());
+    }
+
     /**
      * Restituisce la lista dei nomi file unici indicizzati con checksum
      */
